@@ -1,13 +1,13 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Presentation.Data;
+using Presentation.models;
 using Stripe.Checkout;
-
 
 namespace Presentation.Controllers;
 
-[Route("api/[controller]")]
 [ApiController]
+[Route("api/[controller]")]
 public class PaymentController : ControllerBase
 {
     private readonly IConfiguration _configuration;
@@ -20,29 +20,19 @@ public class PaymentController : ControllerBase
         Stripe.StripeConfiguration.ApiKey = _configuration["Stripe:SecretKey"];
     }
 
-    public class PaymentRequest
-    {
-        public string EventId { get; set; } = null!;
-        public string UserId { get; set; } = null!;
-        public string FirstName { get; set; } = null!;
-        public string LastName { get; set; } = null!;
-        public string PhoneNumber { get; set; } = null!;
-        public decimal Amount { get; set; }
-    }
-
     [HttpPost("create-checkout-session")]
     public async Task<IActionResult> CreateCheckoutSession([FromBody] PaymentRequest request)
     {
-
         var existingUser = await _context.Users.FindAsync(request.UserId);
         if (existingUser == null)
         {
             existingUser = new UserEntity
             {
                 UserId = request.UserId,
-                FirstName = request.FirstName,
-                LastName = request.LastName,
-                PhoneNumber = request.PhoneNumber
+                FirstName = request.BookedBy.FirstName,
+                LastName = request.BookedBy.LastName,
+                PhoneNumber = request.BookedBy.PhoneNumber,
+                  Email = request.BookedBy.Email
             };
 
             _context.Users.Add(existingUser);
@@ -59,14 +49,24 @@ public class PaymentController : ControllerBase
             Amount = request.Amount
         };
 
+        // Fix: Remove the invalid reference to 'tickets' and directly assign the result of the LINQ query to payment.Tickets
+        payment.Tickets = request.Tickets.Select(t => new TicketEntity
+        {
+            PaymentId = payment.PaymentId,
+            FirstName = t.FirstName,
+            LastName = t.LastName,
+            PhoneNumber = t.PhoneNumber,
+            UserId = request.UserId
+        }).ToList();
+
         _context.Payments.Add(payment);
         await _context.SaveChangesAsync();
 
         var options = new SessionCreateOptions
         {
-            PaymentMethodTypes = ["card"],
-            LineItems =
-            [
+            PaymentMethodTypes = new List<string> { "card" },
+            LineItems = new List<SessionLineItemOptions>
+            {
                 new SessionLineItemOptions
                 {
                     PriceData = new SessionLineItemPriceDataOptions
@@ -80,7 +80,7 @@ public class PaymentController : ControllerBase
                     },
                     Quantity = 1
                 }
-            ],
+            },
             Mode = "payment",
             SuccessUrl = _configuration["Stripe:SuccessUrl"],
             CancelUrl = _configuration["Stripe:CancelUrl"],
@@ -119,19 +119,28 @@ public class PaymentController : ControllerBase
         }
 
         var payments = await query
-            .OrderByDescending(p => p.BookingDate)
-            .Select(p => new
-            {
-                p.PaymentId,
-                p.EventId,
-                p.BookingDate,
-                p.Amount,
-                p.IsPaid,
-                p.User.FirstName,
-                p.User.LastName,
-                p.User.PhoneNumber
-            })
-            .ToListAsync();
+    .Include(p => p.Tickets)
+    .OrderByDescending(p => p.BookingDate)
+    .Select(p => new PaymentResponseModel
+    {
+        PaymentId = p.PaymentId,
+        EventId = p.EventId,
+        BookingDate = p.BookingDate,
+        Amount = p.Amount,
+        IsPaid = p.IsPaid,
+        BookedBy = new BookedByModel
+        {
+            FirstName = p.User.FirstName,
+            LastName = p.User.LastName,
+            PhoneNumber = p.User.PhoneNumber
+        },
+        Tickets = p.Tickets.Select(t => new TicketModel
+        {
+            FirstName = t.FirstName,
+            LastName = t.LastName,
+            PhoneNumber = t.PhoneNumber
+        }).ToList()
+    }).ToListAsync();
 
         return Ok(payments);
     }
