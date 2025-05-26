@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Presentation.Data;
 using Stripe.Checkout;
 
@@ -26,13 +27,13 @@ public class PaymentController : ControllerBase
         public string FirstName { get; set; } = null!;
         public string LastName { get; set; } = null!;
         public string PhoneNumber { get; set; } = null!;
-        public decimal Amount { get; set; } 
+        public decimal Amount { get; set; }
     }
 
     [HttpPost("create-checkout-session")]
     public async Task<IActionResult> CreateCheckoutSession([FromBody] PaymentRequest request)
     {
-       
+
         var existingUser = await _context.Users.FindAsync(request.UserId);
         if (existingUser == null)
         {
@@ -52,7 +53,7 @@ public class PaymentController : ControllerBase
             PaymentId = Guid.NewGuid().ToString(),
             EventId = request.EventId,
             BookingDate = DateTime.UtcNow,
-            StripeSessionId = "TEMP", 
+            StripeSessionId = "TEMP",
             IsPaid = false,
             UserId = request.UserId,
             Amount = request.Amount
@@ -99,5 +100,39 @@ public class PaymentController : ControllerBase
         await _context.SaveChangesAsync();
 
         return Ok(new { sessionId = session.Id });
+    }
+
+
+    [HttpGet("GetPayments")]
+    public async Task<IActionResult> GetPayments([FromQuery] string userId, [FromQuery] bool isAdmin)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+            return BadRequest("User ID is required");
+
+        var query = _context.Payments
+            .Include(p => p.User)
+            .AsQueryable();
+
+        if (!isAdmin)
+        {
+            query = query.Where(p => p.UserId == userId);
+        }
+
+        var payments = await query
+            .OrderByDescending(p => p.BookingDate)
+            .Select(p => new
+            {
+                p.PaymentId,
+                p.EventId,
+                p.BookingDate,
+                p.Amount,
+                p.IsPaid,
+                p.User.FirstName,
+                p.User.LastName,
+                p.User.PhoneNumber
+            })
+            .ToListAsync();
+
+        return Ok(payments);
     }
 }
