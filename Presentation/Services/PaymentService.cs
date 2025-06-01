@@ -1,153 +1,130 @@
-﻿//using Microsoft.EntityFrameworkCore;
-//using Presentation.Data;
-//using Presentation.models;
-//using Stripe;
-//using Stripe.Checkout;
-//using System.Text;
-//using System.Text.Json;
+﻿using Microsoft.EntityFrameworkCore;
+using Presentation.Data;
+using Presentation.models;
+using Stripe.Checkout;
 
-//namespace Presentation.Services;
+namespace Presentation.Services;
 
-//public class PaymentService : IPaymentService
-//{
-//    private readonly IConfiguration _config;
-//    private readonly DataContext _context;
-//    private readonly HttpClient _http;
+public class PaymentService : IPaymentService
+{
+    private readonly IConfiguration _config;
+    private readonly DataContext _context;
 
-//    public PaymentService(IConfiguration config, DataContext context)
-//    {
-//        _config = config;
-//        _context = context;
-//        _http = new HttpClient();
-//        StripeConfiguration.ApiKey = _config["Stripe:SecretKey"];
-//    }
+    public PaymentService(IConfiguration config, DataContext context)
+    {
+        _config = config;
+        _context = context;
+        Stripe.StripeConfiguration.ApiKey = _config["Stripe:SecretKey"];
+    }
 
-//    public async Task<string> CreateStripeCheckoutSessionAsync(PaymentRequest request)
-//    {
-//        var options = new SessionCreateOptions
-//        {
-//            PaymentMethodTypes = ["card"],
-//            LineItems =
-//            [
-//                new SessionLineItemOptions
-//            {
-//                PriceData = new SessionLineItemPriceDataOptions
-//                {
-//                    Currency = "sek",
-//                    UnitAmount = (long)(request.Amount * 100),
-//                    ProductData = new SessionLineItemPriceDataProductDataOptions
-//                    {
-//                        Name = $"Event #{request.EventId}"
-//                    }
-//                },
-//                Quantity = 1
-//            }
-//            ],
-//            Mode = "payment",
-//            SuccessUrl = _config["Stripe:SuccessUrl"],
-//            CancelUrl = _config["Stripe:CancelUrl"],
-//            Metadata = new Dictionary<string, string>
-//        {
-//            { "eventId", request.EventId },
-//            { "userId", request.UserId },
-//            { "firstName", request.FirstName },
-//            { "lastName", request.LastName },
-//            { "phoneNumber", request.PhoneNumber },
-//            { "amount", request.Amount.ToString("F2") }
-//        }
-//        };
+    public async Task<string> CreateCheckoutSessionAsync(PaymentRequest request)
+    {
+        var existingUser = await _context.Users.FindAsync(request.UserId);
+        if (existingUser == null)
+        {
+            existingUser = new UserEntity
+            {
+                UserId = request.UserId,
+                FirstName = request.BookedBy.FirstName,
+                LastName = request.BookedBy.LastName,
+                PhoneNumber = request.BookedBy.PhoneNumber,
+                Email = request.BookedBy.Email
+            };
 
-//        var session = await new SessionService().CreateAsync(options);
-//        return session.Id;
-//    }
+            _context.Users.Add(existingUser);
+        }
 
+        var paymentId = Guid.NewGuid().ToString(); 
+        var payment = new PaymentEntity
+        {
+            PaymentId = paymentId, 
+            EventId = request.EventId,
+            BookingDate = DateTime.UtcNow,
+            StripeSessionId = "TEMP",
+            IsPaid = false,
+            UserId = request.UserId,
+            Amount = request.Amount,
+            Tickets = request.Tickets.Select(t => new TicketEntity
+            {
+                PaymentId = paymentId, 
+                FirstName = t.FirstName,
+                LastName = t.LastName,
+                PhoneNumber = t.PhoneNumber,
+                UserId = request.UserId
+            }).ToList()
+        };
 
-//    public async Task<List<PaymentResponseModel>> GetPaymentsAsync(string userId, bool isAdmin)
-//    {
-//        var query = _context.Payments.Include(p => p.User).AsQueryable();
+        _context.Payments.Add(payment);
+        await _context.SaveChangesAsync();
 
-//        if (!isAdmin)
-//        {
-//            query = query.Where(p => p.UserId == userId);
-//        }
+        var options = new SessionCreateOptions
+        {
+            PaymentMethodTypes = new List<string> { "card" },
+            LineItems = new List<SessionLineItemOptions>
+        {
+            new SessionLineItemOptions
+            {
+                PriceData = new SessionLineItemPriceDataOptions
+                {
+                    Currency = "sek",
+                    UnitAmount = (long)(request.Amount * 100),
+                    ProductData = new SessionLineItemPriceDataProductDataOptions
+                    {
+                        Name = $"Event #{request.EventId}"
+                    }
+                },
+                Quantity = 1
+            }
+        },
+            Mode = "payment",
+            SuccessUrl = _config["Stripe:SuccessUrl"],
+            CancelUrl = _config["Stripe:CancelUrl"],
+            Metadata = new Dictionary<string, string>
+        {
+            { "paymentId", payment.PaymentId },
+            { "userId", request.UserId },
+            { "eventId", request.EventId },
+            { "amount", request.Amount.ToString("F2") }
+        }
+        };
 
-//        return await query
-//            .OrderByDescending(p => p.BookingDate)
-//         .Select(p => new PaymentResponseModel
-//         {
-//             PaymentId = p.PaymentId,
-//             EventId = p.EventId,
-//             BookingDate = p.BookingDate,
-//             Amount = p.Amount,
-//             IsPaid = p.IsPaid,
-//             BookedBy = new BookedByModel
-//             {
-//                 FirstName = p.User.FirstName,
-//                 LastName = p.User.LastName,
-//                 PhoneNumber = p.User.PhoneNumber
-//             },
-//             Tickets = p.Tickets.Select(t => new TicketModel
-//             {
-//                 FirstName = t.FirstName,
-//                 LastName = t.LastName,
-//                 PhoneNumber = t.PhoneNumber
-//             }).ToList()
-//         }).ToListAsync();
-//    }
+        var sessionService = new SessionService();
+        var session = sessionService.Create(options);
 
-//    public async Task<bool> MarkPaymentAsPaidAndBookAsync(string json, string stripeSignature)
-//    {
-//        var secret = _config["Stripe:WebhookSecret"];
-//        var stripeEvent = EventUtility.ConstructEvent(json, stripeSignature, secret);
+        payment.StripeSessionId = session.Id;
+        await _context.SaveChangesAsync();
 
-//        if (stripeEvent.Type != "checkout.session.completed") return false;
+        return session.Id;
+    }
 
-//        var session = stripeEvent.Data.Object as Session;
-//        if (session?.Metadata == null) return false;
+    public async Task<List<PaymentResponseModel>> GetPaymentsAsync(string userId, bool isAdmin)
+    {
+        var query = _context.Payments.Include(p => p.User).Include(p => p.Tickets).AsQueryable();
 
-//        var userId = session.Metadata["userId"];
-//        var firstName = session.Metadata["firstName"];
-//        var lastName = session.Metadata["lastName"];
-//        var phoneNumber = session.Metadata["phoneNumber"];
-//        var eventId = session.Metadata["eventId"];
-//        var amount = decimal.Parse(session.Metadata["amount"]);
+        if (!isAdmin)
+        {
+            query = query.Where(p => p.UserId == userId);
+        }
 
-//        var user = await _context.Users.FindAsync(userId);
-//        if (user == null)
-//        {
-//            user = new UserEntity
-//            {
-//                UserId = userId,
-//                FirstName = firstName,
-//                LastName = lastName,
-//                PhoneNumber = phoneNumber
-//            };
-//            _context.Users.Add(user);
-//        }
-
-//        var payment = new PaymentEntity
-//        {
-//            PaymentId = Guid.NewGuid().ToString(),
-//            EventId = eventId,
-//            UserId = userId,
-//            StripeSessionId = session.Id,
-//            BookingDate = DateTime.UtcNow,
-//            Amount = amount,
-//            IsPaid = true
-//        };
-
-//        _context.Payments.Add(payment);
-//        await _context.SaveChangesAsync();
-
-//        var bookingRequest = new
-//        {
-//            userId,
-//            eventId
-//        };
-
-//        var content = new StringContent(JsonSerializer.Serialize(bookingRequest), Encoding.UTF8, "application/json");
-//        var response = await _http.PostAsync("https://bookeventprovider.azurewebsites.net/api/booking", content);
-
-//        return response.IsSuccessStatusCode;
-//    }
-//}
+        return await query.OrderByDescending(p => p.BookingDate).Select(p => new PaymentResponseModel
+        {
+            PaymentId = p.PaymentId,
+            EventId = p.EventId,
+            BookingDate = p.BookingDate,
+            Amount = p.Amount,
+            IsPaid = p.IsPaid,
+            BookedBy = new BookedByModel
+            {
+                FirstName = p.User.FirstName,
+                LastName = p.User.LastName,
+                PhoneNumber = p.User.PhoneNumber
+            },
+            Tickets = p.Tickets.Select(t => new TicketModel
+            {
+                FirstName = t.FirstName,
+                LastName = t.LastName,
+                PhoneNumber = t.PhoneNumber
+            }).ToList()
+        }).ToListAsync();
+    }
+}
