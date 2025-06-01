@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Presentation.Data;
 
@@ -11,9 +12,11 @@ using Presentation.Data;
 namespace Presentation.Migrations
 {
     [DbContext(typeof(DataContext))]
-    partial class DataContextModelSnapshot : ModelSnapshot
+    [Migration("20250526180028_Ticket")]
+    partial class Ticket
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -52,7 +55,7 @@ namespace Presentation.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Payments", (string)null);
+                    b.ToTable("Payments");
                 });
 
             modelBuilder.Entity("Presentation.Data.TicketEntity", b =>
@@ -84,7 +87,7 @@ namespace Presentation.Migrations
 
                     b.HasIndex("PaymentId");
 
-                    b.ToTable("Tickets", (string)null);
+                    b.ToTable("TicketEntity");
                 });
 
             modelBuilder.Entity("Presentation.Data.UserEntity", b =>
@@ -110,7 +113,7 @@ namespace Presentation.Migrations
 
                     b.HasKey("UserId");
 
-                    b.ToTable("Users", (string)null);
+                    b.ToTable("Users");
                 });
 
             modelBuilder.Entity("Presentation.Data.PaymentEntity", b =>

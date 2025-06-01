@@ -6,6 +6,10 @@ namespace Presentation.Data
     {
         [Key]
         public string UserId { get; set; } = null!;
+
+        [Required]
+        public string Email { get; set; } = null!;
+
         [Required]
         public string FirstName { get; set; } = null!;
 
@@ -15,7 +19,6 @@ namespace Presentation.Data
         [Required]
         public string PhoneNumber { get; set; } = null!;
 
-        [Required]
-        public ICollection<PaymentEntity>Payment {get;set;}=[];
+        public ICollection<PaymentEntity> Payments { get; set; } = new List<PaymentEntity>();
     }
 }

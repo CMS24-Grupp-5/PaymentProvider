@@ -1,103 +1,60 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using Presentation.Data;
-using Stripe.Checkout;
+using Presentation.Extentions;
+using Presentation.models;
+using Presentation.Services;
 
-
-namespace Presentation.Controllers;
-
-[Route("api/[controller]")]
-[ApiController]
-public class PaymentController : ControllerBase
+namespace Presentation.Controllers
 {
-    private readonly IConfiguration _configuration;
-    private readonly DataContext _context;
-
-    public PaymentController(IConfiguration configuration, DataContext context)
+    /// <summary>
+    /// API-kontroller för hantering av betalningar via Stripe.
+    /// Skyddas med API-nyckel via <see cref="ApiKeyAttribute"/>.
+    /// </summary>
+    [ApiKey]
+    [ApiController]
+    [Route("api/[controller]")]
+    public class PaymentController : ControllerBase
     {
-        _configuration = configuration;
-        _context = context;
-        Stripe.StripeConfiguration.ApiKey = _configuration["Stripe:SecretKey"];
-    }
+        private readonly IPaymentService _paymentService;
 
-    public class PaymentRequest
-    {
-        public string EventId { get; set; } = null!;
-        public string UserId { get; set; } = null!;
-        public string FirstName { get; set; } = null!;
-        public string LastName { get; set; } = null!;
-        public string PhoneNumber { get; set; } = null!;
-        public decimal Amount { get; set; } 
-    }
-
-    [HttpPost("create-checkout-session")]
-    public async Task<IActionResult> CreateCheckoutSession([FromBody] PaymentRequest request)
-    {
-       
-        var existingUser = await _context.Users.FindAsync(request.UserId);
-        if (existingUser == null)
+        public PaymentController(IPaymentService paymentService)
         {
-            existingUser = new UserEntity
-            {
-                UserId = request.UserId,
-                FirstName = request.FirstName,
-                LastName = request.LastName,
-                PhoneNumber = request.PhoneNumber
-            };
-
-            _context.Users.Add(existingUser);
+            _paymentService = paymentService;
         }
 
-        var payment = new PaymentEntity
+        /// <summary>
+        /// Skapar en ny Stripe Checkout-session för en betalning.
+        /// </summary>
+        /// <param name="request">Information om användare, event och belopp.</param>
+        /// <returns>Session ID för Stripe Checkout.</returns>
+        /// <response code="200">Session ID returneras vid lyckad skapelse.</response>
+        /// <response code="400">Om begäran är ogiltig.</response>
+        [HttpPost("create-checkout-session")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> CreateCheckoutSession([FromBody] PaymentRequest request)
         {
-            PaymentId = Guid.NewGuid().ToString(),
-            EventId = request.EventId,
-            BookingDate = DateTime.UtcNow,
-            StripeSessionId = "TEMP", 
-            IsPaid = false,
-            UserId = request.UserId,
-            Amount = request.Amount
-        };
+            var sessionId = await _paymentService.CreateCheckoutSessionAsync(request);
+            return Ok(new { sessionId });
+        }
 
-        _context.Payments.Add(payment);
-        await _context.SaveChangesAsync();
-
-        var options = new SessionCreateOptions
+        /// <summary>
+        /// Hämtar betalningar för en specifik användare eller alla om admin.
+        /// </summary>
+        /// <param name="userId">Användarens ID.</param>
+        /// <param name="isAdmin">Om användaren är administratör (hämtar alla).</param>
+        /// <returns>En lista med betalningsinformation.</returns>
+        /// <response code="200">Returnerar betalningslista.</response>
+        /// <response code="400">Om användar-ID saknas.</response>
+        [HttpGet("GetPayments")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> GetPayments([FromQuery] string userId, [FromQuery] bool isAdmin)
         {
-            PaymentMethodTypes = ["card"],
-            LineItems =
-            [
-                new SessionLineItemOptions
-                {
-                    PriceData = new SessionLineItemPriceDataOptions
-                    {
-                        Currency = "sek",
-                        UnitAmount = (long)(request.Amount * 100),
-                        ProductData = new SessionLineItemPriceDataProductDataOptions
-                        {
-                            Name = $"Event #{request.EventId}"
-                        }
-                    },
-                    Quantity = 1
-                }
-            ],
-            Mode = "payment",
-            SuccessUrl = _configuration["Stripe:SuccessUrl"],
-            CancelUrl = _configuration["Stripe:CancelUrl"],
-            Metadata = new Dictionary<string, string>
-            {
-                { "paymentId", payment.PaymentId },
-                { "userId", request.UserId },
-                { "eventId", request.EventId },
-                { "amount", request.Amount.ToString("F2") }
-            }
-        };
+            if (string.IsNullOrWhiteSpace(userId))
+                return BadRequest("User ID is required");
 
-        var sessionService = new SessionService();
-        var session = sessionService.Create(options);
-
-        payment.StripeSessionId = session.Id;
-        await _context.SaveChangesAsync();
-
-        return Ok(new { sessionId = session.Id });
+            var payments = await _paymentService.GetPaymentsAsync(userId, isAdmin);
+            return Ok(payments);
+        }
     }
 }

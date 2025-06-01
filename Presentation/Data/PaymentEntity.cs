@@ -21,12 +21,14 @@ namespace Presentation.Data
 
         [Required]
         [Column(TypeName = "decimal(18,2)")]
-        public decimal Amount { get; set; } 
+        public decimal Amount { get; set; }
 
-
+        [Required]
         [ForeignKey("User")]
         public string UserId { get; set; } = null!;
 
         public UserEntity User { get; set; } = null!;
+
+        public ICollection<TicketEntity> Tickets { get; set; } = new List<TicketEntity>();
     }
 }
